@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,12 +19,33 @@ type buildStepStatus struct {
 	Status string
 }
 
+func statusValue(i string) int {
+	switch i {
+	case "SUCCESS":
+		return 0
+	case "WORKING":
+		return 1
+	case "QUEUED":
+		return 2
+	case "INTERNAL_ERROR":
+		return 3
+	case "CANCELLED":
+		return 4
+	case "TIMEOUT":
+		return 5
+	case "FAILURE":
+		return 100
+	}
+	return 90
+}
+
 func (i *buildStepStatus) less(j *buildStepStatus) bool {
-	switch strings.Compare(i.Status, j.Status) {
-	case 1:
-		return true
-	case -1:
+	n := statusValue(i.Status) - statusValue(j.Status)
+	switch {
+	case n > 0:
 		return false
+	case n < 0:
+		return true
 	}
 	switch strings.Compare(i.Name, j.Name) {
 	case 1:
@@ -55,8 +77,8 @@ func getTagName(env []string) string {
 	return tag
 }
 
-func parseBuildSteps(buildID string) ([]buildStepStatus, error) {
-	out, err := exec.Command("gcloud", "builds", "describe", buildID, "--format", "json").Output()
+func parseBuildSteps(buildID string, projectID string) ([]buildStepStatus, error) {
+	out, err := exec.Command("gcloud", "builds", "describe", buildID, "--format", "json", "--project", projectID).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -80,12 +102,16 @@ func parseBuildSteps(buildID string) ([]buildStepStatus, error) {
 }
 
 func main() {
+	var projectID string
+	flag.StringVar(&projectID, "project", "", "project ID")
+	flag.Parse()
+
+	if projectID == "" {
+		panic("ERROR: need project ID")
+	}
 	var bsss []buildStepStatus
-	for i, buildID := range os.Args {
-		if i == 0 {
-			continue
-		}
-		s, err := parseBuildSteps(buildID)
+	for _, buildID := range flag.Args() {
+		s, err := parseBuildSteps(buildID, projectID)
 		if err != nil {
 			fmt.Printf("Error: %s: %v\n", buildID, err)
 			continue
@@ -94,7 +120,15 @@ func main() {
 	}
 
 	sort.SliceStable(bsss, func(i, j int) bool { return bsss[i].less(&bsss[j]) })
+	failed := false
 	for _, bss := range bsss {
-		fmt.Printf("%-22s\t%s\t%s\t%s\n", bss.Name, bss.Tag, bss.ID, bss.Status)
+		if strings.Compare(bss.Status, "SUCCESS") != 0 {
+			failed = true
+		}
+		fmt.Printf("%-24s %s %s %s\n", bss.Name, bss.Tag, bss.ID, bss.Status)
+	}
+
+	if failed {
+		os.Exit(1)
 	}
 }
